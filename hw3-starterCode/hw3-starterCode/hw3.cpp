@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #ifdef WIN32
   #define strcasecmp _stricmp
 #endif
@@ -44,6 +45,7 @@ int mode = MODE_DISPLAY;
 
 //the field of view of the camera
 #define fov 60.0
+#define PI 3.14159
 
 unsigned char buffer[HEIGHT][WIDTH][3];
 
@@ -76,18 +78,67 @@ struct Light
   double color[3];
 };
 
+struct Ray
+{
+    double origin[3];
+    double destination[3];
+};
+
 Triangle triangles[MAX_TRIANGLES];
 Sphere spheres[MAX_SPHERES];
 Light lights[MAX_LIGHTS];
+
 double ambient_light[3];
 
 int num_triangles = 0;
 int num_spheres = 0;
 int num_lights = 0;
+int num_rays = 0;
 
 void plot_pixel_display(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel_jpeg(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
+
+void normalize(double& x, double& y, double& z) {
+    double magnitude = sqrt(pow(x, 2) + pow(y, 2) + pow(z, 2));
+    if (magnitude >= 0)
+    {
+        x = x / magnitude;
+        y = y / magnitude;
+        z = z / magnitude;
+    }
+    else
+    {
+        x = 0;
+        y = 0;
+        z = 0;
+    }
+}
+
+void init_ray(int row, int col, Ray &r) {
+    // set up
+    double a = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
+    double rad = fov * PI / 180.0;
+    double x_min = -a * tan(rad / 2.0);
+    double y_min = -tan(rad / 2.0);
+    double x_max = a * tan(rad / 2.0);
+    double y_max = tan(rad / 2.0);
+    
+    // calc
+    double x = x_min + static_cast<double> (row) * (x_max - x_min) / static_cast<double> (WIDTH);
+    double y = y_min + static_cast<double> (col) * (y_max - y_min) / static_cast<double> (HEIGHT);
+    double z = -1;
+
+    // normalize
+    //printf("B4 Origin: %f %f %f - Dest: %f %f %f\n", 0.0, 0.0, 0.0, x, y, z);
+    normalize(x, y, z);
+
+    // set Ray
+    r.origin[0] = r.origin[1] = r.origin[2] = 0;
+    r.destination[0] = x;
+    r.destination[1] = y;
+    r.destination[2] = z;
+}
 
 //MODIFY THIS FUNCTION
 void draw_scene()
@@ -99,6 +150,10 @@ void draw_scene()
     glBegin(GL_POINTS);
     for(unsigned int y=0; y<HEIGHT; y++)
     {
+      Ray r;
+      init_ray(x, y, r);
+      printf("Origin: %f %f %f - Dest: %f %f %f\n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2]);
+
       plot_pixel(x, y, x % 256, y % 256, (x+y) % 256);
     }
     glEnd();
