@@ -118,13 +118,14 @@ void normalize(double& x, double& y, double& z) {
     }
 }
 
-double dot_product(const double* arr1, int length1, const double* arr2, int length2) {
-    if (length1 != length2) return 0;
-    double sum = 0;
-    for (int i = 0; i < length1; i++) {
-        sum += arr1[i] * arr2[i];
-    }
-    return sum;
+double dot_product(const double v1[3], const double v2[3]) {
+    return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+}
+
+void cross_product(const double a[1], const double b[3], double c[3]) {
+    c[0] = a[1] * b[2] - a[2] * b[1];
+    c[1] = a[2] * b[0] - a[0] * b[2];
+    c[2] = a[0] * b[1] - a[1] * b[0];
 }
 
 void init_ray(int row, int col, Ray &r) {
@@ -182,7 +183,52 @@ bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
     return (idx != -1);
 }
 
+// moller-trumbore algorithm, no need for projection and plane precomputation
 bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
+    double edge1[3], edge2[3], normal[3], h[3], s[3], q[3];
+    double a, f, u, v;
+    t_min = (std::numeric_limits<double>::max)();
+    idx = -1;
+    for (int i = 0; i < num_triangles; i++) {
+        Triangle triangle = triangles[i];
+        // B - A edge1 = v1 - v0
+        edge1[0] = triangle.v[1].position[0] - triangle.v[0].position[0];
+        edge1[1] = triangle.v[1].position[1] - triangle.v[0].position[1];
+        edge1[2] = triangle.v[1].position[2] - triangle.v[0].position[2];
+
+        // C - A edge2 = v2 - v0
+        edge2[0] = triangle.v[2].position[0] - triangle.v[0].position[0];
+        edge2[1] = triangle.v[2].position[1] - triangle.v[0].position[1];
+        edge2[2] = triangle.v[2].position[2] - triangle.v[0].position[2];
+
+        // some more math
+        cross_product(r.direction, edge2, h); // h = edge2 CROSS r.direction
+        a = dot_product(edge1, h); // a = edge1 DOT h
+        if (abs(a) < EPSILON) continue; // parallel
+
+        // more math
+        f = 1.0 / a;
+        // s = r.origin - v0
+        s[0] = r.origin[0] - triangle.v[0].position[0];
+        s[1] = r.origin[1] - triangle.v[0].position[1];
+        s[2] = r.origin[2] - triangle.v[0].position[2];
+        // u = f * s DOT h
+        u = f * dot_product(s, h);
+        if (u < 0.0 || u > 1.0) continue;
+
+        // q = edge1 CROSS s
+        cross_product(s, edge1, q);
+        // v = f * ray.direction DOT q
+        v = f * dot_product(r.direction, q);
+        if (v < 0.0 || u + v > 1.0) continue;
+        
+        // compute t = f * edge2 DOT q
+        double t = f * dot_product(edge2, q);
+        if (t > EPSILON && t < t_min) {
+            t_min = t;
+            idx = i;
+        }
+    }
     return (idx != -1);
 }
 
@@ -199,10 +245,11 @@ void draw_scene()
       Ray r;
       init_ray(x, y, r);
       //printf("Origin: %f %f %f - Dest: %f %f %f\n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2]);
-      double t;
-      int idx;
-      bool intersect = intersect_sphere(r, t, idx);
-      // if (intersect) printf("Origin: %f %f %f - Dest: %f %f %f\n Intersects sphere %d at %f \n ----------- \n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2], idx, t);
+      double ts, tt;
+      int idx_s, idx_t;
+      bool intersect = intersect_sphere(r, ts, idx_s);
+      bool intersect2 = intersect_triangle(r, tt, idx_t);
+      if (intersect2) printf("Origin: %f %f %f - Dest: %f %f %f\n Intersects triangle %d at %f \n ----------- \n", r.origin[0], r.origin[1], r.origin[2], r.direction[0], r.direction[1], r.direction[2], idx_t, tt);
       // else printf("DOESN'T INTERSECT ANY\n");
       plot_pixel(x, y, x % 256, y % 256, (x+y) % 256);
     }
