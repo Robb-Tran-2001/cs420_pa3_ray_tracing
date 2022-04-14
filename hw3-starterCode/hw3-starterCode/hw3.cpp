@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits>
+
 #ifdef WIN32
   #define strcasecmp _stricmp
 #endif
@@ -45,6 +47,7 @@ int mode = MODE_DISPLAY;
 
 //the field of view of the camera
 #define fov 60.0
+#define EPSILON 1e-5
 #define PI 3.14159
 
 unsigned char buffer[HEIGHT][WIDTH][3];
@@ -81,7 +84,7 @@ struct Light
 struct Ray
 {
     double origin[3];
-    double destination[3];
+    double direction[3];
 };
 
 Triangle triangles[MAX_TRIANGLES];
@@ -115,6 +118,15 @@ void normalize(double& x, double& y, double& z) {
     }
 }
 
+double dot_product(const double* arr1, int length1, const double* arr2, int length2) {
+    if (length1 != length2) return 0;
+    double sum = 0;
+    for (int i = 0; i < length1; i++) {
+        sum += arr1[i] * arr2[i];
+    }
+    return sum;
+}
+
 void init_ray(int row, int col, Ray &r) {
     // set up
     double a = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
@@ -135,9 +147,43 @@ void init_ray(int row, int col, Ray &r) {
 
     // set Ray
     r.origin[0] = r.origin[1] = r.origin[2] = 0;
-    r.destination[0] = x;
-    r.destination[1] = y;
-    r.destination[2] = z;
+    r.direction[0] = x;
+    r.direction[1] = y;
+    r.direction[2] = z;
+}
+
+bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
+    t_min = (std::numeric_limits<double>::max)();
+    idx = -1;
+    double x0 = r.origin[0], y0 = r.origin[1], z0 = r.origin[2];
+    double xd = r.direction[0], yd = r.direction[1], zd = r.direction[2];
+    double xc, yc, zc, radius;
+    double a, b, c;
+    double t0, t1, t_temp;
+
+    for (int i = 0; i < num_spheres; i++) {
+        // get other sphere variables
+        xc = spheres[i].position[0], yc = spheres[i].position[1], zc = spheres[i].position[2];
+        radius = spheres[i].radius;
+        // get values
+        a = 1;
+        b = 2 * (xd * (x0 - xc) + yd * (y0 - yc) + zd * (z0 - zc));
+        c = pow((x0 - xc), 2) + pow((y0 - yc), 2) + pow((z0 - zc), 2) - pow(radius, 2);
+        // get t0, t1
+        t0 = -b + sqrt(b * b - 4 * c) / 2.0;
+        t1 = -b - sqrt(b * b - 4 * c) / 2.0;
+        t_temp = min(t0, t1);
+        // get nearest t
+        if (t_temp > EPSILON && t_temp < t_min) {
+            idx = i;
+            t_min = t_temp;
+        }
+    }
+    return (idx != -1);
+}
+
+bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
+    return (idx != -1);
 }
 
 //MODIFY THIS FUNCTION
@@ -152,8 +198,12 @@ void draw_scene()
     {
       Ray r;
       init_ray(x, y, r);
-      printf("Origin: %f %f %f - Dest: %f %f %f\n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2]);
-
+      //printf("Origin: %f %f %f - Dest: %f %f %f\n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2]);
+      double t;
+      int idx;
+      bool intersect = intersect_sphere(r, t, idx);
+      // if (intersect) printf("Origin: %f %f %f - Dest: %f %f %f\n Intersects sphere %d at %f \n ----------- \n", r.origin[0], r.origin[1], r.origin[2], r.destination[0], r.destination[1], r.destination[2], idx, t);
+      // else printf("DOESN'T INTERSECT ANY\n");
       plot_pixel(x, y, x % 256, y % 256, (x+y) % 256);
     }
     glEnd();
