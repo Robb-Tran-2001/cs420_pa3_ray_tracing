@@ -22,6 +22,7 @@
 #include <string.h>
 #include <math.h>
 #include <limits>
+#include <random>
 
 #ifdef WIN32
   #define strcasecmp _stricmp
@@ -49,6 +50,9 @@ int mode = MODE_DISPLAY;
 #define fov 60.0
 #define EPSILON 1e-5
 #define PI 3.14159
+#define SOFT_SHADOW true
+#define ANTI_ALIASING true
+#define SUB_LIGHTS 30
 
 unsigned char buffer[HEIGHT][WIDTH][3];
 
@@ -98,10 +102,20 @@ int num_spheres = 0;
 int num_lights = 0;
 int num_rays = 0;
 
+inline double rand_val()
+{
+    std::random_device dev;
+    std::mt19937 rng(dev());
+    std::uniform_real_distribution<double> dist(0.f, 1);
+
+    return dist(rng);
+}
+
 void plot_pixel_display(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel_jpeg(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 
+// --- helper --- //
 void normalize(double& x, double& y, double& z) {
     double magnitude = sqrt(pow(x, 2) + pow(y, 2) + pow(z, 2));
     if (magnitude >= 0)
@@ -122,12 +136,21 @@ double dot_product(const double v1[3], const double v2[3]) {
     return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
 }
 
-void cross_product(const double a[1], const double b[3], double c[3]) {
+void cross_product(const double a[1], const double b[3], double (&c)[3]) {
     c[0] = a[1] * b[2] - a[2] * b[1];
     c[1] = a[2] * b[0] - a[0] * b[2];
     c[2] = a[0] * b[1] - a[1] * b[0];
 }
 
+void reflect_dir(const double L[3], const double N[3], double (&R)[3]) {
+    // R = 2 * (L DOT N) * N - L
+    double factor = 2 * dot_product(N, L);
+    R[0] = factor * N[0] - L[0];
+    R[1] = factor * N[1] - L[1];
+    R[2] = factor * N[2] - L[2];
+}
+
+// --- init --- //
 void init_ray(int row, int col, Ray &r) {
     // set up
     double a = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
@@ -153,6 +176,40 @@ void init_ray(int row, int col, Ray &r) {
     r.direction[2] = z;
 }
 
+// soft shadow feature
+void init_light() {
+    if (!SOFT_SHADOW) return;
+    int initial_num_lights = num_lights;
+    double color[3], center[3];
+
+    for (int i = 0; i < initial_num_lights; i++) {
+        color[0] = lights[i].color[0] / SUB_LIGHTS;
+        color[1] = lights[i].color[1] / SUB_LIGHTS;
+        color[2] = lights[i].color[2] / SUB_LIGHTS;
+
+        center[0] = lights[i].position[0];
+        center[1] = lights[i].position[1];
+        center[2] = lights[i].position[2];
+
+        lights[i].color[0] = color[0];
+        lights[i].color[1] = color[1];
+        lights[i].color[2] = color[2];
+
+        for (int j = 0; j < SUB_LIGHTS - 1; j++) {
+            lights[num_lights].color[0] = color[0];
+            lights[num_lights].color[1] = color[1];
+            lights[num_lights].color[2] = color[2];
+            
+            lights[num_lights].position[0] = center[0] + rand_val();
+            lights[num_lights].position[1] = center[1] + rand_val();
+            lights[num_lights].position[2] = center[2] + rand_val();
+
+            num_lights++;
+        }
+    }
+}
+
+// --- intersect --- //
 bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
     t_min = (std::numeric_limits<double>::max)();
     idx = -1;
@@ -230,6 +287,94 @@ bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
         }
     }
     return (idx != -1);
+}
+
+// --- ray tracing --- //
+void calc_color_ratio(int& idx, double pos[3], double(&ratio)[3]) {
+    double edgeAB[3], edgeAC[3], normal[3], edgePA[3], edgePB[3], edgePC[3], normalPBC[3], normalPCA[3], normalPAB[3];
+
+    // B - A edge1 = v1 - v0
+    edgeAB[0] = triangles[idx].v[1].position[0] - triangles[idx].v[0].position[0];
+    edgeAB[1] = triangles[idx].v[1].position[1] - triangles[idx].v[0].position[1];
+    edgeAB[2] = triangles[idx].v[1].position[2] - triangles[idx].v[0].position[2];
+
+    // C - A edge2 = v2 - v0
+    edgeAC[0] = triangles[idx].v[2].position[0] - triangles[idx].v[0].position[0];
+    edgeAC[1] = triangles[idx].v[2].position[1] - triangles[idx].v[0].position[1];
+    edgeAC[2] = triangles[idx].v[2].position[2] - triangles[idx].v[0].position[2];
+
+    // ABC area
+    cross_product(edgeAB, edgeAC, normal);
+    double areaABC = sqrt(pow(normal[0], 2) + pow(normal[1], 2) + pow(normal[2], 2)) * 0.5;
+
+    // get edgePA
+    edgePA[0] = triangles[idx].v[0].position[0] - pos[0];
+    edgePA[1] = triangles[idx].v[0].position[1] - pos[1];
+    edgePA[2] = triangles[idx].v[0].position[2] - pos[2];
+    // get edgePA
+    edgePB[0] = triangles[idx].v[1].position[0] - pos[0];
+    edgePB[1] = triangles[idx].v[1].position[1] - pos[1];
+    edgePB[2] = triangles[idx].v[1].position[2] - pos[2];
+    // get edgePA
+    edgePC[0] = triangles[idx].v[2].position[0] - pos[0];
+    edgePC[1] = triangles[idx].v[2].position[1] - pos[1];
+    edgePC[2] = triangles[idx].v[2].position[2] - pos[2];
+
+    cross_product(edgePB, edgePC, normalPBC);
+    double areaPBC = sqrt(pow(normalPBC[0], 2) + pow(normalPBC[1], 2) + pow(normalPBC[2], 2)) * 0.5;
+
+    cross_product(edgePC, edgePA, normalPCA);
+    double areaPCA = sqrt(pow(normalPCA[0], 2) + pow(normalPCA[1], 2) + pow(normalPCA[2], 2)) * 0.5;
+
+    cross_product(edgePA, edgePB, normalPAB);
+    double areaPAB = sqrt(pow(normalPAB[0], 2) + pow(normalPAB[1], 2) + pow(normalPAB[2], 2)) * 0.5;
+
+    ratio[0] = areaPBC / areaABC;
+    ratio[1] = areaPCA / areaABC;
+    ratio[2] = areaPAB / areaABC;
+}
+
+bool in_shadow(const Light& light, const Vertex& point) {
+     
+}
+
+void calc_shading(Vertex& hitPoint, Light& light, double(&result)[3]) {
+    double diffuse[3], specular[3], light_dir[3];
+    // get light direction, normalize
+    light_dir[0] = light.position[0] - hitPoint.position[0];
+    light_dir[1] = light.position[1] - hitPoint.position[1];
+    light_dir[2] = light.position[2] - hitPoint.position[2];
+    normalize(light_dir[0], light_dir[1], light_dir[2]);
+
+    // get diffuse
+    double diff = max(dot_product(light_dir, hitPoint.normal), 0.0);
+    diffuse[0] = light.color[0] * hitPoint.color_diffuse[0] * diff;
+    diffuse[1] = light.color[1] * hitPoint.color_diffuse[1] * diff;
+    diffuse[2] = light.color[2] * hitPoint.color_diffuse[2] * diff;
+
+    // get view dir, normalize
+    double view_dir[3];
+    view_dir[0] = -hitPoint.position[0];
+    view_dir[1] = -hitPoint.position[1];
+    view_dir[2] = -hitPoint.position[2];
+    normalize(view_dir[0], view_dir[1], view_dir[2]);
+
+    // get reflect dir
+    double r_dir[3];
+    light_dir[0] *= -1;
+    light_dir[1] *= -1;
+    light_dir[2] *= -1;
+    reflect_dir(light_dir, hitPoint.normal, r_dir);
+
+    // get specular
+    double spec = pow(max(dot_product(view_dir, r_dir), 0.0), hitPoint.shininess);
+    specular[0] = light.color[0] * hitPoint.color_specular[0] * spec;
+    specular[1] = light.color[1] * hitPoint.color_specular[1] * spec;
+    specular[2] = light.color[2] * hitPoint.color_specular[2] * spec;
+
+    result[0] = diffuse[0] + specular[0];
+    result[1] = diffuse[1] + specular[1];
+    result[2] = diffuse[2] + specular[2];
 }
 
 //MODIFY THIS FUNCTION
