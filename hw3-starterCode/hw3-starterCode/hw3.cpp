@@ -5,37 +5,56 @@
  * *************************
 */
 
+/* **************************
+ * Environment
+ 1. Camera is placed at origin (0,0,0)
+ 2. Focal Length is set to 1
+ * *************************
+*/
+
 #ifdef WIN32
-  #include <windows.h>
+#include <windows.h>
 #endif
 
 #if defined(WIN32) || defined(linux)
-  #include <GL/gl.h>
-  #include <GL/glut.h>
+#include <GL/gl.h>
+#include <GL/glut.h>
 #elif defined(__APPLE__)
-  #include <OpenGL/gl.h>
-  #include <GLUT/glut.h>
+#include <OpenGL/gl.h>
+#include <GLUT/glut.h>
 #endif
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 #include <limits>
+#include <imageIO.h>
+#include <algorithm>
+#include <iostream>
 #include <random>
 
 #ifdef WIN32
-  #define strcasecmp _stricmp
+#define strcasecmp _stricmp
 #endif
 
-#include <imageIO.h>
-
-#define MAX_TRIANGLES 20000
+#define MAX_TRIANGLES 2000
 #define MAX_SPHERES 100
 #define MAX_LIGHTS 100
-#define MAX_REFLECTION 3
 
-char * filename = NULL;
+#define EPSILON 1e-5
+#define PI 3.14159
+
+// TODO change these parameters for different effect
+#define WIDTH 640
+#define HEIGHT 480
+#define MAX_REFLECTION 3
+#define REFLECT_RATIO 0.1
+#define ANTI_ALIASING true
+#define SOFT_SHADOW true
+#define SUB_LIGHTS 30
+
+char* filename = NULL;
 
 //different display modes
 #define MODE_DISPLAY 1
@@ -43,22 +62,14 @@ char * filename = NULL;
 
 int mode = MODE_DISPLAY;
 
-//you may want to make these smaller for debugging purposes
-#define WIDTH 640
-#define HEIGHT 480
-
 //the field of view of the camera
 #define fov 60.0
-#define EPSILON 1e-5
-#define PI 3.14159
-#define SOFT_SHADOW true
-#define ANTI_ALIASING true
-#define SUB_LIGHTS 30
-#define REFLECT_RATIO 0.1
+
+using namespace std;
 
 unsigned char buffer[HEIGHT][WIDTH][3];
-
-double aspect_ratio, rad, x_min, y_min, x_max, y_max, screen_width, cell_width, screen_height, cell_height;
+double cell_width, cell_height;
+double x_min, y_min;
 
 // helper struct to help with all the annoying double[3] math
 struct Vector {
@@ -163,15 +174,15 @@ Vector refract_dir(const Vector& I, const Vector& N, const double& ratio) {
 // --- init --- //
 void init_screen() {
     // set up
-    aspect_ratio = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
-    rad = fov * PI / 180.0;
+    double aspect_ratio = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
+    double rad = fov * PI / 180.0;
     x_min = -aspect_ratio * tan(rad / 2.0);
     y_min = -tan(rad / 2.0);
-    x_max = aspect_ratio * tan(rad / 2.0);
-    y_max = tan(rad / 2.0);
-    screen_width = x_max - x_min;
+    double x_max = aspect_ratio * tan(rad / 2.0);
+    double y_max = tan(rad / 2.0);
+    double screen_width = x_max - x_min;
     cell_width = screen_width / static_cast<double> (WIDTH);
-    screen_height = y_max - y_min;
+    double screen_height = y_max - y_min;
     cell_height = screen_height / static_cast<double> (HEIGHT);
 }
 
