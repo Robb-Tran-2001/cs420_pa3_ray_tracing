@@ -5,13 +5,6 @@
  * *************************
 */
 
-/* **************************
- * Environment
- 1. Camera is placed at origin (0,0,0)
- 2. Focal Length is set to 1
- * *************************
-*/
-
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -45,14 +38,14 @@
 #define EPSILON 1e-5
 #define PI 3.14159
 
-// TODO change these parameters for different effect
+// change these parameters for different effect
 #define WIDTH 640
 #define HEIGHT 480
 #define MAX_REFLECTION 3
 #define REFLECT_RATIO 0.1
 #define ANTI_ALIASING true
 #define SOFT_SHADOW true
-#define SUB_LIGHTS 30
+#define SUB_LIGHTS 10
 
 char* filename = NULL;
 
@@ -186,10 +179,11 @@ void init_screen() {
     cell_height = screen_height / static_cast<double> (HEIGHT);
 }
 
+// rays for antialiasing
 void init_ray(int row, int col, Ray (&r)[4]) {
     // calc
-    double x = x_min + (2 * row + 1) / 2.0 * cell_width;
-    double y = y_min + (2 * col + 1) / 2.0 * cell_height;
+    double x = x_min + (2 * (double)row + 1) / 2.0 * cell_width;
+    double y = y_min + (2 * (double)col + 1) / 2.0 * cell_height;
     double z = -1;
 
     // normalize
@@ -219,7 +213,7 @@ void init_light() {
     }
 }
 
-// --- intersect --- //
+// --- intersect sphere --- //
 bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
     t_min = (std::numeric_limits<double>::max)();
     idx = -1;
@@ -246,7 +240,7 @@ bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
     return (idx != -1);
 }
 
-// moller-trumbore algorithm, no need for projection and plane precomputation
+// --- intersect triangle moller-trumbore algorithm, no plane precomputation --- //
 bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
     t_min = (std::numeric_limits<double>::max)();
     idx = -1;
@@ -264,7 +258,7 @@ bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
         Vector s2 = s.cross(edge1);
         double k = s1.dot(edge1);
         if (abs(k) < EPSILON) continue;
-       
+
         // barycentric math
         double t_temp = 1 / k * s2.dot(edge2);
         double b1 = 1 / k * s1.dot(s);
@@ -281,40 +275,29 @@ bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
     return (idx != -1);
 }
 
-// --- ray tracing --- //
-void calc_color_ratio(int& idx, Vector pos, double(&ratio)[3]) {
-    // get vertices
-    Vertex vertex0 = triangles[idx].v[0];
-    Vertex vertex1 = triangles[idx].v[1];
-    Vertex vertex2 = triangles[idx].v[1];
-
-    // get 2 edges
-    Vector ab = vertex1.position - vertex0.position;
-
-    // C - A edge2 = v2 - v0
-    Vector ac = vertex2.position - vertex0.position;
-
-    // ABC area
-    double areaABC = ab.cross(ac).to_norm() * 0.5;
-
-    // get edgePA
-    Vector pa = vertex0.position - pos;
-
-    // get edgePB
-    Vector pb = vertex1.position - pos;
-
-    // get edgePC
-    Vector pc = vertex2.position - pos;
-
-    double areaPBC = pb.cross(pc).to_norm() * 0.5;
-    double areaPCA = pc.cross(pa).to_norm() * 0.5;
-    double areaPAB = pa.cross(pb).to_norm() * 0.5;
-
-    ratio[0] = areaPBC / areaABC;
-    ratio[1] = areaPCA / areaABC;
+// --- get vertex color ratio for triangle --- //
+void calc_color_ratio(int& idx, Vector pos, double(&ratio)[3])
+{
+    Triangle triangle = triangles[idx];
+    // get the 2 edges to get area
+    Vector ab = triangle.v[1].position - triangle.v[0].position;
+    Vector ac = triangle.v[2].position - triangle.v[0].position;
+    double areaABC = ab.cross(ac).to_norm() * 0.5f;
+    // get the 3 inner edges
+    Vector pa = triangle.v[0].position - pos;
+    Vector pb = triangle.v[1].position - pos;
+    Vector pc = triangle.v[2].position - pos;
+    // get inner areas
+    double arePBC = pb.cross(pc).to_norm() * 0.5f;
+    double areaPCA = pc.cross(pa).to_norm() * 0.5f;
+    double areaPAB = pa.cross(pb).to_norm() * 0.5f;
+    // get color ratio
+    ratio[0] = arePBC / areaABC;
+    ratio[1] = areaPCA/ areaABC;
     ratio[2] = areaPAB / areaABC;
 }
 
+// --- actual ray tracing --- //
 bool in_shadow(const Light& light, const Vertex& point) {
     Vector dir = (light.position - point.position).norm();
     Ray shadow_ray = { point.position + dir * 5 * EPSILON, dir };
@@ -365,34 +348,37 @@ Vector calc_shading(Vertex& hit_point, Light& light) {
     return diffuse + specular;
 }
 
-Vector calc_radiance(const Ray& r, int times) {
-    double t1, t2;
-    int idx1, idx2;
+Vector calc_radiance(const Ray& r, int times)
+{
+    double t1, t2; int idx1, idx2;
     bool hit_sphere = intersect_sphere(r, t1, idx1);
-    bool hit_triangle = intersect_sphere(r, t2, idx2);
+    bool hit_triangle = intersect_triangle(r, t2, idx2);
 
-    // nothing hit
-    if (!hit_sphere && !hit_triangle) {
+    // hit nothing
+    if (!hit_sphere && !hit_triangle)
         return background_color;
-    }
 
-    Vertex hit_point;
-    // if ray hits only sphere or hits sphere before triangle
-    if ((hit_sphere && !hit_triangle) && (hit_sphere && hit_triangle && t1 < t2)) {
+    Vertex hitPoint;
+    // hit sphere
+    if ((hit_sphere && !hit_triangle) || (hit_sphere && hit_triangle && t1 < t2))
+    {
         Sphere sphere = spheres[idx1];
-        hit_point = {
+        hitPoint = {
             r.o + r.d * t1,
             sphere.color_diffuse,
             sphere.color_specular,
             (r.o + r.d * t1 - sphere.position).norm(),
             sphere.shininess
         };
-    } // hit triangle
-    else {
-        double ratio[3];
-        Vector pos = r.o + r.d * t2;
-        calc_color_ratio(idx2, pos, ratio);
+    }
+    // hit triangle
+    else
+    {
         Triangle triangle = triangles[idx2];
+        double ratio[3];
+        Vector position = r.o + r.d * t2;
+        // get color ratio to compute diff spec and normal from vertices value
+        calc_color_ratio(idx2, position, ratio);
         Vector diffuse = triangle.v[0].color_diffuse * ratio[0] + triangle.v[1].color_diffuse * ratio[1] + triangle.v[2].color_diffuse * ratio[2];
 
         Vector specular = triangle.v[0].color_specular * ratio[0] + triangle.v[1].color_specular * ratio[1] + triangle.v[2].color_specular * ratio[2];
@@ -400,73 +386,73 @@ Vector calc_radiance(const Ray& r, int times) {
         Vector normal = triangle.v[0].normal * ratio[0] + triangle.v[1].normal * ratio[1] + triangle.v[2].normal * ratio[2];
 
         double shininess = triangle.v[0].shininess * ratio[0] + triangle.v[1].shininess * ratio[1] + triangle.v[2].shininess * ratio[2];
-        hit_point = { pos, diffuse, specular, normal.norm(), shininess };
+        hitPoint = { position, diffuse, specular, normal.norm(), shininess };
     }
 
-    Vector current_ray_color = Vector(0, 0, 0);
-    // for each light
-    for (int i = 0; i < num_lights; i++) {
-        if (!in_shadow(lights[i], hit_point)) {
-            current_ray_color = current_ray_color + calc_shading(hit_point, lights[i]);
+    Vector cur_ray_color = Vector(0, 0, 0);
+    // for each light (including sublight)
+    for (int k = 0; k < num_lights; k++)
+    {
+        if (!in_shadow(lights[k], hitPoint))
+        {
+            cur_ray_color = cur_ray_color + calc_shading(hitPoint, lights[k]);
         }
     }
 
-    // base case - max reflections reached, update radiance with only current_ray_color
-    if (times >= MAX_REFLECTION) {
-        return current_ray_color;
-    }
+    // base case max reflection reached
+    if (times >= MAX_REFLECTION)
+        return cur_ray_color;
 
     times++;
+    // reflect Ray for recursive call
+    Vector refl_dir = reflect_dir(r.d, hitPoint.normal);
+    Ray refl_ray = { hitPoint.position, refl_dir };
+    Vector refl_color = calc_radiance(refl_ray, times);
 
-    // reflect ray, recurse
-    Vector r_dir = reflect_dir(r.d, hit_point.normal);
-    Ray reflect_ray = { hit_point.position, r_dir };
-    Vector reflect_color = calc_radiance(reflect_ray, times);
-    
-    return current_ray_color * (1 - REFLECT_RATIO) + reflect_color * REFLECT_RATIO;
+    return cur_ray_color * (1 - REFLECT_RATIO) + refl_color * REFLECT_RATIO;
 }
 
 //MODIFY THIS FUNCTION
 void draw_scene()
 {
     init_screen();
-  //a simple test output
-  for(unsigned int x=0; x<WIDTH; x++)
-  {
-    glPointSize(2.0);  
-    glBegin(GL_POINTS);
-    for(unsigned int y=0; y<HEIGHT; y++)
+    //a simple test output
+    for(unsigned int x=0; x<WIDTH; x++)
     {
-        if (ANTI_ALIASING)
+        glPointSize(2.0);  
+        glBegin(GL_POINTS);
+        for(unsigned int y=0; y<HEIGHT; y++)
         {
-            Ray rays[4];
-            Vector color;
-            init_ray(x, y, rays);
-            for (int k = 0; k < 4; k++)
+            if (ANTI_ALIASING)
             {
-                color = color + calc_radiance(rays[k], 0);
+                Ray rays[4];
+                Vector color;
+                init_ray(x, y, rays);
+                for (int k = 0; k < 4; k++)
+                {
+                    color = color + calc_radiance(rays[k], 0);
+                }
+                color = color / 4;
+                plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
             }
-            color = color / 4;
-            plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
-        }
-        else
-        {
-            Ray ray;
-            Vector color;
-            double xx = x_min + (2 * x + 1) * cell_width / 2.0f;
-            double yy = y_min + (2 * y + 1) * cell_height / 2.0f;
-            double zz = -1;
+            else
+            {
+                Ray ray;
+                Vector color;
+                double x1 = x_min + (2 * (double)x + 1) * cell_width / 2.0f;
+                double y1 = y_min + (2 * (double)y + 1) * cell_height / 2.0f;
+                double z1 = -1;
 
-            ray = { Vector(0,0,0),  Vector(xx,yy,zz).norm() };
-            color = calc_radiance(ray, 1) + ambient_light;
-            clamp(color);
-            plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
+                ray = { Vector(0,0,0),  Vector(x1, y1, z1).norm() };
+                color = calc_radiance(ray, 1) + ambient_light;
+                clamp(color);
+                plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
+            }
         }
+        glEnd();
+        glFlush();
     }
-    glEnd();
-    glFlush();
-  }
-  printf("Done!\n"); fflush(stdout);
+    printf("Done!\n"); fflush(stdout);
 }
 
 void plot_pixel_display(int x, int y, unsigned char r, unsigned char g, unsigned char b)
