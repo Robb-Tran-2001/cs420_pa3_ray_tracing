@@ -1,4 +1,4 @@
-/* **************************
+﻿/* **************************
  * CSCI 420
  * Assignment 3 Raytracer
  * Name: Robb Tran
@@ -58,12 +58,30 @@ int mode = MODE_DISPLAY;
 
 unsigned char buffer[HEIGHT][WIDTH][3];
 
+double aspect_ratio, rad, x_min, y_min, x_max, y_max, screen_width, cell_width, screen_height, cell_height;
+
+// helper struct to help with all the annoying double[3] math
+struct Vector {
+    double x, y, z;
+    Vector(double x1 = 0, double y1 = 0, double z1 = 0) { x = x1; y = y1; z = z1; }
+    Vector operator+(const Vector& v) const { return Vector(x + v.x, y + v.y, z + v.z); }
+    Vector operator-(const Vector& v) const { return Vector(x - v.x, y - v.y, z - v.z); }
+    Vector operator-() const { return Vector(-x, -y, -z); }
+    Vector operator*(double a) const { return Vector(x * a, y * a, z * a); }
+    Vector operator/(double a) const { return Vector(x / a, y / a, z / a); }
+    Vector mult(const Vector& a) const { return Vector(x * a.x, y * a.y, z * a.z); }
+    Vector& norm() { return *this = *this * (1 / sqrt(x * x + y * y + z * z)); }
+    double dot(const Vector& a) const { return x * a.x + y * a.y + z * a.z; }
+    double to_norm() { return sqrt(x * x + y * y + z * z); }
+    Vector cross(const Vector& a) const { return Vector(y * a.z - z * a.y, z * a.x - x * a.z, x * a.y - y * a.x); }
+};
+
 struct Vertex
 {
-  double position[3];
-  double color_diffuse[3];
-  double color_specular[3];
-  double normal[3];
+  Vector position;
+  Vector color_diffuse;
+  Vector color_specular;
+  Vector normal;
   double shininess;
 };
 
@@ -74,42 +92,46 @@ struct Triangle
 
 struct Sphere
 {
-  double position[3];
-  double color_diffuse[3];
-  double color_specular[3];
+  Vector position;
+  Vector color_diffuse;
+  Vector color_specular;
   double shininess;
   double radius;
 };
 
 struct Light
 {
-  double position[3];
-  double color[3];
+  Vector position;
+  Vector color;
 };
 
 struct Ray
 {
-    double origin[3];
-    double direction[3];
+    Vector o;
+    Vector d;
 };
 
 Triangle triangles[MAX_TRIANGLES];
 Sphere spheres[MAX_SPHERES];
 Light lights[MAX_LIGHTS];
 
-double ambient_light[3];
+Vector ambient_light;
+Vector background_color = Vector(1.0, 1.0, 1.0);
 
 int num_triangles = 0;
 int num_spheres = 0;
 int num_lights = 0;
 int num_rays = 0;
 
-double a, rad, x_min, y_min, x_max, y_max, screen_width, cell_width, screen_height, cell_height;
+// --- helper --- //
+void clamp(Vector color) {
+    if (color.x > 1.0) color.x = 1.0;
+    if (color.y > 1.0) color.y = 1.0;
+    if (color.z > 1.0) color.z = 1.0;
+}
 
-void clamp(double(&color)[3]) {
-    if (color[0] > 1.0) color[0] = 1.0;
-    if (color[1] > 1.0) color[1] = 1.0;
-    if (color[2] > 1.0) color[2] = 1.0;
+bool in_range(double v, double low, double high) {
+    return (v >= low && v <= high);
 }
 
 inline double rand_val()
@@ -125,49 +147,27 @@ void plot_pixel_display(int x,int y,unsigned char r,unsigned char g,unsigned cha
 void plot_pixel_jpeg(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 
-// --- helper --- //
-void normalize(double& x, double& y, double& z) {
-    double magnitude = sqrt(pow(x, 2) + pow(y, 2) + pow(z, 2));
-    if (magnitude >= 0)
-    {
-        x = x / magnitude;
-        y = y / magnitude;
-        z = z / magnitude;
-    }
-    else
-    {
-        x = 0;
-        y = 0;
-        z = 0;
-    }
+Vector reflect_dir(const Vector& I, const Vector& N) //I and N should be normalized
+{
+    Vector reflect = I - N * 2 * N.dot(I);
+    return reflect.norm();
 }
 
-double dot_product(const double v1[3], const double v2[3]) {
-    return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
-}
-
-void cross_product(const double a[1], const double b[3], double (&c)[3]) {
-    c[0] = a[1] * b[2] - a[2] * b[1];
-    c[1] = a[2] * b[0] - a[0] * b[2];
-    c[2] = a[0] * b[1] - a[1] * b[0];
-}
-
-void reflect_dir(const double L[3], const double N[3], double (&R)[3]) {
-    // R = 2 * (L DOT N) * N - L
-    double factor = 2 * dot_product(N, L);
-    R[0] = factor * N[0] - L[0];
-    R[1] = factor * N[1] - L[1];
-    R[2] = factor * N[2] - L[2];
+Vector refract_dir(const Vector& I, const Vector& N, const double& ratio) {
+    double k = 1.0 - ratio * ratio * (1.0 - N.dot(I) * N.dot(I));
+    if (k < 0.0)
+        return Vector(0, 0, 0);
+    return I * ratio - N * (ratio * N.dot(I) + sqrt(k));
 }
 
 // --- init --- //
 void init_screen() {
     // set up
-    a = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
+    aspect_ratio = static_cast<double> (WIDTH) / static_cast<double> (HEIGHT);
     rad = fov * PI / 180.0;
-    x_min = -a * tan(rad / 2.0);
+    x_min = -aspect_ratio * tan(rad / 2.0);
     y_min = -tan(rad / 2.0);
-    x_max = a * tan(rad / 2.0);
+    x_max = aspect_ratio * tan(rad / 2.0);
     y_max = tan(rad / 2.0);
     screen_width = x_max - x_min;
     cell_width = screen_width / static_cast<double> (WIDTH);
@@ -177,68 +177,32 @@ void init_screen() {
 
 void init_ray(int row, int col, Ray (&r)[4]) {
     // calc
-    double x = x_min + (2 * static_cast<double>(row) + 1) / 2.0 * cell_width;
-    double y = y_min + (2 * static_cast<double>(col) + 1) / 2.0 * cell_height;
+    double x = x_min + (2 * row + 1) / 2.0 * cell_width;
+    double y = y_min + (2 * col + 1) / 2.0 * cell_height;
     double z = -1;
 
     // normalize
     //printf("B4 Origin: %f %f %f - Dest: %f %f %f\n", 0.0, 0.0, 0.0, x, y, z);
-    normalize(x, y, z);
-
-    // set Ray
-    r[0].origin[0] = r[0].origin[1] = r[0].origin[2] = 0;
-    r[0].direction[0] = (x - cell_width) / 4.0;
-    r[0].direction[1] = y;
-    r[0].direction[2] = z;
-    normalize(r[0].direction[0], r[0].direction[1], r[0].direction[2]);
-
-    r[1].origin[0] = r[1].origin[1] = r[1].origin[2] = 0;
-    r[1].direction[0] = (x + cell_width) / 4.0;
-    r[1].direction[1] = y;
-    r[1].direction[2] = z;
-    normalize(r[1].direction[0], r[1].direction[1], r[1].direction[2]);
-
-    r[2].origin[0] = r[2].origin[1] = r[2].origin[2] = 0;
-    r[2].direction[0] = x;
-    r[2].direction[1] = (y - cell_height) / 4.0;
-    r[2].direction[2] = z;
-    normalize(r[2].direction[0], r[2].direction[1], r[2].direction[2]);
-
-    r[3].origin[0] = r[3].origin[1] = r[3].origin[2] = 0;
-    r[3].direction[0] = x;
-    r[3].direction[1] = (y + cell_height) / 4.0;
-    r[3].direction[2] = z;
-    normalize(r[3].direction[0], r[3].direction[1], r[3].direction[2]);
+    r[0] = { Vector(0, 0, 0), Vector(x - cell_width/4.0, y, z).norm() };
+    r[1] = { Vector(0, 0, 0), Vector(x + cell_width / 4.0, y, z).norm() };
+    r[2] = { Vector(0, 0, 0), Vector(x, y - cell_height / 4.0, z).norm() };
+    r[3] = { Vector(0, 0, 0), Vector(x, y + cell_height / 4.0, z).norm() };
 }
 
 // soft shadow feature
 void init_light() {
     if (!SOFT_SHADOW) return;
     int initial_num_lights = num_lights;
-    double color[3], center[3];
 
     for (int i = 0; i < initial_num_lights; i++) {
-        color[0] = lights[i].color[0] / SUB_LIGHTS;
-        color[1] = lights[i].color[1] / SUB_LIGHTS;
-        color[2] = lights[i].color[2] / SUB_LIGHTS;
+        Vector color = lights[i].color / SUB_LIGHTS;
+        Vector center = lights[i].position;
 
-        center[0] = lights[i].position[0];
-        center[1] = lights[i].position[1];
-        center[2] = lights[i].position[2];
-
-        lights[i].color[0] = color[0];
-        lights[i].color[1] = color[1];
-        lights[i].color[2] = color[2];
+        lights[i].color = color;
 
         for (int j = 0; j < SUB_LIGHTS - 1; j++) {
-            lights[num_lights].color[0] = color[0];
-            lights[num_lights].color[1] = color[1];
-            lights[num_lights].color[2] = color[2];
-            
-            lights[num_lights].position[0] = center[0] + rand_val();
-            lights[num_lights].position[1] = center[1] + rand_val();
-            lights[num_lights].position[2] = center[2] + rand_val();
-
+            lights[num_lights].color = color;
+            lights[num_lights].position = Vector(center.x + rand_val(), center.y + rand_val(), center.z + rand_val());
             num_lights++;
         }
     }
@@ -248,24 +212,20 @@ void init_light() {
 bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
     t_min = (std::numeric_limits<double>::max)();
     idx = -1;
-    double x0 = r.origin[0], y0 = r.origin[1], z0 = r.origin[2];
-    double xd = r.direction[0], yd = r.direction[1], zd = r.direction[2];
-    double xc, yc, zc, radius;
-    double a, b, c;
-    double t0, t1, t_temp;
 
     for (int i = 0; i < num_spheres; i++) {
         // get other sphere variables
-        xc = spheres[i].position[0], yc = spheres[i].position[1], zc = spheres[i].position[2];
-        radius = spheres[i].radius;
-        // get values
-        a = 1;
-        b = 2 * (xd * (x0 - xc) + yd * (y0 - yc) + zd * (z0 - zc));
-        c = pow((x0 - xc), 2) + pow((y0 - yc), 2) + pow((z0 - zc), 2) - pow(radius, 2);
+        Vector oc = Vector(r.o - spheres[i].position);
+        // get a, b, c
+        double a = 1;
+        double b = 2 * oc.dot(r.d);
+        double c = oc.dot(oc) - pow(spheres[i].radius, 2);
+        double delta = b * b - 4 * a * c;
+        if (delta < 0) continue;
         // get t0, t1
-        t0 = -b + sqrt(b * b - 4 * c) / 2.0;
-        t1 = -b - sqrt(b * b - 4 * c) / 2.0;
-        t_temp = min(t0, t1);
+        double t0 = (-b + sqrt(delta)) / 2;
+        double t1 = (-b - sqrt(delta)) / 2;
+        double t_temp = min(t0, t1);
         // get nearest t
         if (t_temp > EPSILON && t_temp < t_min) {
             idx = i;
@@ -277,47 +237,33 @@ bool intersect_sphere(const Ray& r, double& t_min, int& idx) {
 
 // moller-trumbore algorithm, no need for projection and plane precomputation
 bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
-    double edge1[3], edge2[3], h[3], s[3], q[3];
-    double a, f, u, v;
     t_min = (std::numeric_limits<double>::max)();
     idx = -1;
     for (int i = 0; i < num_triangles; i++) {
         Triangle triangle = triangles[i];
         // B - A edge1 = v1 - v0
-        edge1[0] = triangle.v[1].position[0] - triangle.v[0].position[0];
-        edge1[1] = triangle.v[1].position[1] - triangle.v[0].position[1];
-        edge1[2] = triangle.v[1].position[2] - triangle.v[0].position[2];
+        Vector edge1 = triangle.v[1].position - triangle.v[0].position;
 
         // C - A edge2 = v2 - v0
-        edge2[0] = triangle.v[2].position[0] - triangle.v[0].position[0];
-        edge2[1] = triangle.v[2].position[1] - triangle.v[0].position[1];
-        edge2[2] = triangle.v[2].position[2] - triangle.v[0].position[2];
+        Vector edge2 = triangle.v[2].position - triangle.v[0].position;
 
         // some more math
-        cross_product(r.direction, edge2, h); // h = edge2 CROSS r.direction
-        a = dot_product(edge1, h); // a = edge1 DOT h
-        if (abs(a) < EPSILON) continue; // parallel
+        Vector s = r.o - triangle.v[0].position;
+        Vector s1 = r.d.cross(edge2);
+        Vector s2 = s.cross(edge1);
+        double k = s1.dot(edge1);
+        if (abs(k) < EPSILON) continue;
+       
+        // barycentric math
+        double t_temp = 1 / k * s2.dot(edge2);
+        double b1 = 1 / k * s1.dot(s);
+        double b2 = 1 / k * s2.dot(r.d);
+        double b3 = 1 - b1 - b2;
 
-        // more math
-        f = 1.0 / a;
-        // s = r.origin - v0
-        s[0] = r.origin[0] - triangle.v[0].position[0];
-        s[1] = r.origin[1] - triangle.v[0].position[1];
-        s[2] = r.origin[2] - triangle.v[0].position[2];
-        // u = f * s DOT h
-        u = f * dot_product(s, h);
-        if (u < 0.0 || u > 1.0) continue;
-
-        // q = edge1 CROSS s
-        cross_product(s, edge1, q);
-        // v = f * ray.direction DOT q
-        v = f * dot_product(r.direction, q);
-        if (v < 0.0 || u + v > 1.0) continue;
-        
-        // compute t = f * edge2 DOT q
-        double t = f * dot_product(edge2, q);
-        if (t > EPSILON && t < t_min) {
-            t_min = t;
+        if (t_temp < EPSILON || !in_range(b1, 0, 1) || !in_range(b2, 0, 1) || !in_range(b3, 0, 1))
+            continue;
+        if (t_temp < t_min) {
+            t_min = t_temp;
             idx = i;
         }
     }
@@ -325,44 +271,33 @@ bool intersect_triangle(const Ray& r, double& t_min, int& idx) {
 }
 
 // --- ray tracing --- //
-void calc_color_ratio(int& idx, double pos[3], double(&ratio)[3]) {
-    double edgeAB[3], edgeAC[3], normal[3], edgePA[3], edgePB[3], edgePC[3], normalPBC[3], normalPCA[3], normalPAB[3];
+void calc_color_ratio(int& idx, Vector pos, double(&ratio)[3]) {
+    // get vertices
+    Vertex vertex0 = triangles[idx].v[0];
+    Vertex vertex1 = triangles[idx].v[1];
+    Vertex vertex2 = triangles[idx].v[1];
 
-    // B - A edge1 = v1 - v0
-    edgeAB[0] = triangles[idx].v[1].position[0] - triangles[idx].v[0].position[0];
-    edgeAB[1] = triangles[idx].v[1].position[1] - triangles[idx].v[0].position[1];
-    edgeAB[2] = triangles[idx].v[1].position[2] - triangles[idx].v[0].position[2];
+    // get 2 edges
+    Vector ab = vertex1.position - vertex0.position;
 
     // C - A edge2 = v2 - v0
-    edgeAC[0] = triangles[idx].v[2].position[0] - triangles[idx].v[0].position[0];
-    edgeAC[1] = triangles[idx].v[2].position[1] - triangles[idx].v[0].position[1];
-    edgeAC[2] = triangles[idx].v[2].position[2] - triangles[idx].v[0].position[2];
+    Vector ac = vertex2.position - vertex0.position;
 
     // ABC area
-    cross_product(edgeAB, edgeAC, normal);
-    double areaABC = sqrt(pow(normal[0], 2) + pow(normal[1], 2) + pow(normal[2], 2)) * 0.5;
+    double areaABC = ab.cross(ac).to_norm() * 0.5;
 
     // get edgePA
-    edgePA[0] = triangles[idx].v[0].position[0] - pos[0];
-    edgePA[1] = triangles[idx].v[0].position[1] - pos[1];
-    edgePA[2] = triangles[idx].v[0].position[2] - pos[2];
-    // get edgePA
-    edgePB[0] = triangles[idx].v[1].position[0] - pos[0];
-    edgePB[1] = triangles[idx].v[1].position[1] - pos[1];
-    edgePB[2] = triangles[idx].v[1].position[2] - pos[2];
-    // get edgePA
-    edgePC[0] = triangles[idx].v[2].position[0] - pos[0];
-    edgePC[1] = triangles[idx].v[2].position[1] - pos[1];
-    edgePC[2] = triangles[idx].v[2].position[2] - pos[2];
+    Vector pa = vertex0.position - pos;
 
-    cross_product(edgePB, edgePC, normalPBC);
-    double areaPBC = sqrt(pow(normalPBC[0], 2) + pow(normalPBC[1], 2) + pow(normalPBC[2], 2)) * 0.5;
+    // get edgePB
+    Vector pb = vertex1.position - pos;
 
-    cross_product(edgePC, edgePA, normalPCA);
-    double areaPCA = sqrt(pow(normalPCA[0], 2) + pow(normalPCA[1], 2) + pow(normalPCA[2], 2)) * 0.5;
+    // get edgePC
+    Vector pc = vertex2.position - pos;
 
-    cross_product(edgePA, edgePB, normalPAB);
-    double areaPAB = sqrt(pow(normalPAB[0], 2) + pow(normalPAB[1], 2) + pow(normalPAB[2], 2)) * 0.5;
+    double areaPBC = pb.cross(pc).to_norm() * 0.5;
+    double areaPCA = pc.cross(pa).to_norm() * 0.5;
+    double areaPAB = pa.cross(pb).to_norm() * 0.5;
 
     ratio[0] = areaPBC / areaABC;
     ratio[1] = areaPCA / areaABC;
@@ -370,153 +305,114 @@ void calc_color_ratio(int& idx, double pos[3], double(&ratio)[3]) {
 }
 
 bool in_shadow(const Light& light, const Vertex& point) {
+    Vector dir = (light.position - point.position).norm();
+    Ray shadow_ray = { point.position + dir * 5 * EPSILON, dir };
+
+    // check if shadow ray intersects with any shapes, if it does, no shadow
+    double t1, t2; int i1, i2;
+    bool hit_sphere = intersect_sphere(shadow_ray, t1, i1);
+    bool hit_triangle = intersect_triangle(shadow_ray, t2, i2);
+
+    // hit nothing
+    if (!hit_sphere && !hit_triangle)
+        return false;
+
+    // hit point should not exceed light position
+    Vector hit_pos;
+    if ((hit_sphere && !hit_triangle) || (hit_sphere && hit_triangle && t1 < t2))
+        hit_pos = shadow_ray.o + shadow_ray.d * t1;
+    else
+        hit_pos = shadow_ray.o + shadow_ray.d * t2;
+
+    double point_to_light_len = (point.position - light.position).to_norm();
+    double point_to_hit_len = (point.position - hit_pos).to_norm();
+    if (point_to_hit_len - point_to_light_len > EPSILON)
+        return false;
+
     return true;
 }
 
-void calc_shading(Vertex& hitPoint, Light& light, double(&result)[3]) {
-    double diffuse[3], specular[3], light_dir[3];
+Vector calc_shading(Vertex& hit_point, Light& light) {
+    Vector diffuse, specular;
     // get light direction, normalize light_dir = light_pos - hitPoint.Pos
-    light_dir[0] = light.position[0] - hitPoint.position[0];
-    light_dir[1] = light.position[1] - hitPoint.position[1];
-    light_dir[2] = light.position[2] - hitPoint.position[2];
-    normalize(light_dir[0], light_dir[1], light_dir[2]);
-
+    Vector light_dir = (light.position - hit_point.position).norm();
     // get diffuse diff = max(light_dir DOT hitpoint.normal, 0)
-    double diff = max(dot_product(light_dir, hitPoint.normal), 0.0);
+    double diff = max(light_dir.dot(hit_point.normal), 0.0);
     // diffuse = light.color * (hitPoint.color_diff * diff)
-    diffuse[0] = light.color[0] * hitPoint.color_diffuse[0] * diff;
-    diffuse[1] = light.color[1] * hitPoint.color_diffuse[1] * diff;
-    diffuse[2] = light.color[2] * hitPoint.color_diffuse[2] * diff;
+    diffuse = light.color.mult(hit_point.color_diffuse * diff);
 
     // get view dir, normalize view_dir = -hitPoint.pos
-    double view_dir[3];
-    view_dir[0] = -hitPoint.position[0];
-    view_dir[1] = -hitPoint.position[1];
-    view_dir[2] = -hitPoint.position[2];
-    normalize(view_dir[0], view_dir[1], view_dir[2]);
-
+    Vector view_dir = (-hit_point.position).norm();
     // get reflect dir r_dir = 2 * (light_dir DOT hitpoint.Normal) * hitPoint.normal - light_dir
-    double r_dir[3];
-    reflect_dir(light_dir, hitPoint.normal, r_dir);
-
+    Vector r_dir = reflect_dir(-light_dir, hit_point.normal);
     // get specular spec = max(view_dir DOT r_dir, shininess) 
-    double spec = pow(max(dot_product(view_dir, r_dir), 0.0), hitPoint.shininess);
+    double spec = pow(max(view_dir.dot(r_dir), 0.0), hit_point.shininess);
     // specular = light.color * (hitPointt.color_specular * spec)
-    specular[0] = light.color[0] * hitPoint.color_specular[0] * spec;
-    specular[1] = light.color[1] * hitPoint.color_specular[1] * spec;
-    specular[2] = light.color[2] * hitPoint.color_specular[2] * spec;
+    specular = light.color.mult(hit_point.color_specular * spec);
 
     // result = diffuse + specular
-    result[0] = diffuse[0] + specular[0];
-    result[1] = diffuse[1] + specular[1];
-    result[2] = diffuse[2] + specular[2];
+    return diffuse + specular;
 }
 
-void calc_radiance(const Ray& ray, int times, double (&radiance)[3]) {
+Vector calc_radiance(const Ray& r, int times) {
     double t1, t2;
     int idx1, idx2;
-    bool hit_sphere = intersect_sphere(ray, t1, idx1);
-    bool hit_triangle = intersect_sphere(ray, t2, idx2);
+    bool hit_sphere = intersect_sphere(r, t1, idx1);
+    bool hit_triangle = intersect_sphere(r, t2, idx2);
 
     // nothing hit
     if (!hit_sphere && !hit_triangle) {
-        radiance[0] = radiance[1] = radiance[2] = 1.0;
-        return;
+        return background_color;
     }
 
     Vertex hit_point;
     // if ray hits only sphere or hits sphere before triangle
     if ((hit_sphere && !hit_triangle) && (hit_sphere && hit_triangle && t1 < t2)) {
-        printf("HIT SPHERE\n");
-        // get hit point pos
-        double hit_point_pos[3] = { ray.origin[0] + ray.direction[0] * t1, ray.origin[1] + ray.direction[1] * t1, ray.origin[2] + ray.direction[2] * t1 };
-        // get normal for hit point and normalize
-        double normal[3] = { hit_point_pos[0] - spheres[idx1].position[0], hit_point_pos[1] - spheres[idx1].position[1], hit_point_pos[2] - spheres[idx1].position[2] };
-        normalize(normal[0], normal[1], normal[2]);
-
-        // create hitpoint
+        Sphere sphere = spheres[idx1];
         hit_point = {
-            { hit_point_pos[0], hit_point_pos[1], hit_point_pos[2] },
-            {spheres[idx1].color_diffuse[0], spheres[idx1].color_diffuse[1], spheres[idx1].color_diffuse[2] },
-            {spheres[idx1].color_specular[0], spheres[idx1].color_specular[1], spheres[idx1].color_specular[2] },
-            { normal[0], normal[1], normal[2] },
-            spheres[idx1].shininess
+            r.o + r.d * t1,
+            sphere.color_diffuse,
+            sphere.color_specular,
+            (r.o + r.d * t1 - sphere.position).norm(),
+            sphere.shininess
         };
     } // hit triangle
     else {
         double ratio[3];
-        double hit_point_pos[3] = { ray.origin[0] + ray.direction[0] * t2, ray.origin[1] + ray.direction[1] * t2, ray.origin[2] + ray.direction[2] * t2 };
-        calc_color_ratio(idx2, hit_point_pos, ratio);
+        Vector pos = r.o + r.d * t2;
+        calc_color_ratio(idx2, pos, ratio);
         Triangle triangle = triangles[idx2];
-        
-        // get diffuse
-        double diffuse[3];
-        diffuse[0] = triangle.v[0].color_diffuse[0] * ratio[0] + triangle.v[1].color_diffuse[0] * ratio[1] + triangle.v[2].color_diffuse[0] * ratio[2];
-        diffuse[1] = triangle.v[0].color_diffuse[1] * ratio[0] + triangle.v[1].color_diffuse[1] * ratio[1] + triangle.v[2].color_diffuse[1] * ratio[2];
-        diffuse[2] = triangle.v[0].color_diffuse[2] * ratio[0] + triangle.v[1].color_diffuse[2] * ratio[1] + triangle.v[2].color_diffuse[2] * ratio[2];
+        Vector diffuse = triangle.v[0].color_diffuse * ratio[0] + triangle.v[1].color_diffuse * ratio[1] + triangle.v[2].color_diffuse * ratio[2];
 
-        // get specular
-        double specular[3];
-        specular[0] = triangle.v[0].color_specular[0] * ratio[0] + triangle.v[1].color_specular[0] * ratio[1] + triangle.v[2].color_specular[0] * ratio[2];
-        specular[1] = triangle.v[0].color_specular[1] * ratio[0] + triangle.v[1].color_specular[1] * ratio[1] + triangle.v[2].color_specular[1] * ratio[2];
-        specular[2] = triangle.v[0].color_specular[2] * ratio[0] + triangle.v[1].color_specular[2] * ratio[1] + triangle.v[2].color_specular[2] * ratio[2];
+        Vector specular = triangle.v[0].color_specular * ratio[0] + triangle.v[1].color_specular * ratio[1] + triangle.v[2].color_specular * ratio[2];
 
-        // get normal
-        double normal[3];
-        normal[0] = triangle.v[0].normal[0] * ratio[0] + triangle.v[1].normal[0] * ratio[1] + triangle.v[2].normal[0] * ratio[2];
-        normal[1] = triangle.v[0].normal[1] * ratio[0] + triangle.v[1].normal[1] * ratio[1] + triangle.v[2].normal[1] * ratio[2];
-        normal[2] = triangle.v[0].normal[2] * ratio[0] + triangle.v[1].normal[2] * ratio[1] + triangle.v[2].normal[2] * ratio[2];
+        Vector normal = triangle.v[0].normal * ratio[0] + triangle.v[1].normal * ratio[1] + triangle.v[2].normal * ratio[2];
 
-        // shininess
         double shininess = triangle.v[0].shininess * ratio[0] + triangle.v[1].shininess * ratio[1] + triangle.v[2].shininess * ratio[2];
-
-        // create hitpoint
-        hit_point = {
-            { hit_point_pos[0], hit_point_pos[1], hit_point_pos[2] },
-            { diffuse[0], diffuse[1], diffuse[2] },
-            { specular[0], specular[1], specular[2] },
-            { normal[0], normal[1], normal[2] },
-            shininess
-        };
+        hit_point = { pos, diffuse, specular, normal.norm(), shininess };
     }
 
-    double current_ray_color[3] = { 0, 0, 0 };
+    Vector current_ray_color = Vector(0, 0, 0);
     // for each light
     for (int i = 0; i < num_lights; i++) {
         if (!in_shadow(lights[i], hit_point)) {
-            double result[3];
-            calc_shading(hit_point, lights[i], result);
-            current_ray_color[0] += result[0];
-            current_ray_color[1] += result[1];
-            current_ray_color[2] += result[2];
+            current_ray_color = current_ray_color + calc_shading(hit_point, lights[i]);
         }
     }
 
     // base case - max reflections reached, update radiance with only current_ray_color
     if (times >= MAX_REFLECTION) {
-        radiance[0] = current_ray_color[0];
-        radiance[1] = current_ray_color[1];
-        radiance[2] = current_ray_color[2];
-        return;
+        return current_ray_color;
     }
 
     times++;
 
     // reflect ray, recurse
-    double negate_ray_dir[3] = { -ray.direction[0] , -ray.direction[1] , -ray.direction[2] };
-    double r_dir[3];
-    reflect_dir(negate_ray_dir, hit_point.normal, r_dir);
-    Ray reflect_ray = {
-        { hit_point.position[0], hit_point.position[1], hit_point.position[2] },
-        { r_dir[0], r_dir[1], r_dir[2] },
-    };
-    double r_color[3];
-    calc_radiance(reflect_ray, times, r_color);
-
-    // done with recursion, update radiance
-    radiance[0] = current_ray_color[0] * (1 - REFLECT_RATIO) + r_color[0] * REFLECT_RATIO;
-    radiance[1] = current_ray_color[1] * (1 - REFLECT_RATIO) + r_color[1] * REFLECT_RATIO;
-    radiance[2] = current_ray_color[2] * (1 - REFLECT_RATIO) + r_color[2] * REFLECT_RATIO;
+    Vector r_dir = reflect_dir(r.d, hit_point.normal);
+    Ray reflect_ray = { hit_point.position, r_dir };
+    Vector reflect_color = calc_radiance(reflect_ray, times);
+    
+    return current_ray_color * (1 - REFLECT_RATIO) + reflect_color * REFLECT_RATIO;
 }
 
 //MODIFY THIS FUNCTION
@@ -530,20 +426,31 @@ void draw_scene()
     glBegin(GL_POINTS);
     for(unsigned int y=0; y<HEIGHT; y++)
     {
-      Ray r[4];
-      init_ray(x, y, r);
-      double color[3];
-      for (int k = 0; k < 4; k++) {
-          double color_temp[3];
-          calc_radiance(r[k], 0, color_temp);
-          color[0] += color_temp[0];
-          color[1] += color_temp[1];
-          color[2] += color_temp[2];
-      }
-      color[0] /= 4.0;
-      color[1] /= 4.0;
-      color[2] /= 4.0;
-      plot_pixel(x, y, static_cast<int>(color[0] * 255), static_cast<int>(color[1] * 255), static_cast<int>(color[2] * 255));
+        if (ANTI_ALIASING)
+        {
+            Ray rays[4];
+            Vector color;
+            init_ray(x, y, rays);
+            for (int k = 0; k < 4; k++)
+            {
+                color = color + calc_radiance(rays[k], 0);
+            }
+            color = color / 4;
+            plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
+        }
+        else
+        {
+            Ray ray;
+            Vector color;
+            double xx = x_min + (2 * x + 1) * cell_width / 2.0f;
+            double yy = y_min + (2 * y + 1) * cell_height / 2.0f;
+            double zz = -1;
+
+            ray = { Vector(0,0,0),  Vector(xx,yy,zz).norm() };
+            color = calc_radiance(ray, 1) + ambient_light;
+            clamp(color);
+            plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
+        }
     }
     glEnd();
     glFlush();
@@ -592,13 +499,13 @@ void parse_check(const char *expected, char *found)
   }
 }
 
-void parse_doubles(FILE* file, const char *check, double p[3])
+void parse_doubles(FILE* file, const char *check, Vector& p)
 {
   char str[100];
   fscanf(file,"%s",str);
   parse_check(check,str);
-  fscanf(file,"%lf %lf %lf",&p[0],&p[1],&p[2]);
-  printf("%s %lf %lf %lf\n",check,p[0],p[1],p[2]);
+  fscanf(file,"%lf %lf %lf", &p.x, &p.y, &p.z);
+  printf("%s %lf %lf %lf\n",check, p.x, p.y, p.z);
 }
 
 void parse_rad(FILE *file, double *r)
@@ -716,6 +623,7 @@ void idle()
   static int once=0;
   if(!once)
   {
+    init_light();
     draw_scene();
     if(mode == MODE_JPEG)
       save_jpg();
