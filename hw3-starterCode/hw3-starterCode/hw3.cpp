@@ -45,7 +45,7 @@
 #define REFLECT_RATIO 0.1
 #define ANTI_ALIASING true
 #define SOFT_SHADOW true
-#define SUB_LIGHTS 10
+#define SUB_LIGHTS 30
 
 char* filename = NULL;
 
@@ -330,21 +330,21 @@ Vector calc_shading(Vertex& hit_point, Light& light) {
     Vector diffuse, specular;
     // get light direction, normalize light_dir = light_pos - hitPoint.Pos
     Vector light_dir = (light.position - hit_point.position).norm();
-    // get diffuse diff = max(light_dir DOT hitpoint.normal, 0)
+    // A = max((L dot N), 0) 
     double diff = max(light_dir.dot(hit_point.normal), 0.0);
-    // diffuse = light.color * (hitPoint.color_diff * diff)
+    // A' = lightColor * (A * kd)
     diffuse = light.color.mult(hit_point.color_diffuse * diff);
 
     // get view dir, normalize view_dir = -hitPoint.pos
     Vector view_dir = (-hit_point.position).norm();
     // get reflect dir r_dir = 2 * (light_dir DOT hitpoint.Normal) * hitPoint.normal - light_dir
     Vector r_dir = reflect_dir(-light_dir, hit_point.normal);
-    // get specular spec = max(view_dir DOT r_dir, shininess) 
+    // B = max((R dot V)^sh, 0) 
     double spec = pow(max(view_dir.dot(r_dir), 0.0), hit_point.shininess);
-    // specular = light.color * (hitPointt.color_specular * spec)
+    // B' = lightColor * (B * ks)
     specular = light.color.mult(hit_point.color_specular * spec);
 
-    // result = diffuse + specular
+    // A' + B'
     return diffuse + specular;
 }
 
@@ -433,6 +433,7 @@ void draw_scene()
                     color = color + calc_radiance(rays[k], 0);
                 }
                 color = color / 4;
+                clamp(color);
                 plot_pixel(x, y, (int)(color.x * 255), (int)(color.y * 255), (int)(color.z * 255));
             }
             else
